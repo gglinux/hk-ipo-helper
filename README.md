@@ -26,13 +26,16 @@
 ```
 招股书（自动下载 or 你提供）→ 智能解析(去噪+章节切分+表格自检) → 6D 决策
                                                     ↑
-                        港交所/集思录/腾讯行情(存活) + web search(兜底)
+              AAStocks(主力) → aipo(备用) → 港交所(兜底) → web search(最终兜底)
 ```
 
-- ✅ **港交所披露易**：在招列表、招股书 PDF 链接（主干靠它，最稳）
-- ✅ **集思录**（历史/入场费）、**腾讯行情**（A股价算 A+H 折价）
-- ⚠️ **aipo.myiqdii.com**（孖展/基石/评级/暗盘）：**该源目前可能已失效**，`analyze`/`overview` 会自动降级并提示走 web search
-- 🌐 **web search**：孖展/超购/暗盘/负面/市场水位的兜底，始终可用
+- ✅ **AAStocks（阿斯达克）—— 主力源**：招股列表、入场费、保荐人、**基石名单+金额**、暗盘日、（中后期）孖展。`analyze`/`overview` 优先用它，实测稳定。
+- ✅ **港交所披露易**：在招列表、招股书 PDF 链接（招股书主干靠它，最稳）
+- ✅ **集思录**（历史/入场费/保荐人战绩）、**腾讯行情**（A股价算 A+H 折价）
+- ⚠️ **aipo.myiqdii.com**（孖展/基石/评级/暗盘）：降为**备用**，易被内网 DNS 屏蔽或反爬失效，仅 AAStocks 拿不到时才尝试
+- 🌐 **web search**：孖展/超购/暗盘/负面/市场水位的最终兜底，始终可用
+
+> `analyze`/`overview` 采用 **AAStocks → aipo → 港交所 → web search** 四级降级，每级失败自动降到下一级，并在输出的 `_source`/`_fallback`/`_data_status` 标注实际来源与缺口。
 
 ## 快速开始
 
@@ -47,15 +50,15 @@ python3 fetch_prospectus.py --name 永康        # 或 --id 108390
 # 2. 招股书精读（产出 全文.md + 关键章节.key.md + 表格自检）
 python3 pdf2md.py ./prospectus/永康控股.pdf
 
-# 3. 抓量化数据（含降级兜底，看 _data_status 判断哪些要 web search 补）
-python3 hkipo.py analyze 02523
-python3 hkipo.py ah compare 02523 --price 30.5 --name 永康控股
+# 3. 抓量化数据（AAStocks 优先，含降级；看 _data_status 判断哪些要 web search 补）
+python3 hkipo.py analyze 00668
+python3 hkipo.py ah compare 00668 --price 99.32 --name 安克创新
 
 # 4. 中签率（本地计算，无网络依赖）
-python3 hkipo.py odds --oversub 300 --price 30.5
+python3 hkipo.py odds --oversub 300 --price 99.32
 ```
 
-在支持 Skills 的 AI Agent 中，直接说「帮我分析 02523.HK 能不能打」即可触发完整 6D 分析。
+在支持 Skills 的 AI Agent 中，直接说「帮我分析 00668.HK 能不能打」即可触发完整 6D 分析。
 
 ## 目录结构
 
@@ -66,7 +69,7 @@ hk-ipo-helper/
 │   ├── fetch_prospectus.py      # 招股书自动下载（港交所源 + %PDF 校验）
 │   ├── pdf2md.py                # 招股书解析：去噪 + 章节切分 + 表格自检
 │   ├── hkipo.py                 # 数据引擎 CLI 入口
-│   ├── hkipo/                   # 数据源适配器（hkex/jisilu/ah 存活；aipo 可能失效）
+│   └── hkipo/                   # 数据源适配器（aastocks 主力；hkex/jisilu/ah 存活；aipo 备用）
 │   └── config/                  # 用户画像配置
 └── references/
     ├── scoring-6d.md            # ⭐ 6D 实战评分模型（决策核心）

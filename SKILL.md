@@ -41,14 +41,17 @@ dependency:
 |----|------|------|------|
 | 🎯 **决策核心** | 6D 实战评分，输出四选一决策 | `references/scoring-6d.md` | ✅ 稳定 |
 | 📄 **主干·招股书精读** | 自动下载招股书 + 智能去噪 + 章节切分 + 表格自检 | `fetch_prospectus.py` + `pdf2md.py` | ✅ 稳定（港交所官方源） |
-| 🔢 **加速·数据引擎** | 在招列表/入场费/A+H折价/中签率/保荐人历史 | `scripts/hkipo.py` | ⚠️ 部分源可用，失效自动降级 |
+| 🔢 **加速·数据引擎** | 在招列表/入场费/保荐人/基石/A+H折价/中签率 | `scripts/hkipo.py` | ✅ AAStocks 主力可用，多级降级 |
 | 🌐 **兜底·实时核查** | 孖展/超购/暗盘/负面/市场水位 | web search | ✅ 始终可用 |
 
-**数据源存活状态**（会变，以实际运行的降级提示为准）：
-- ✅ **港交所披露易**（在招列表、招股书 PDF 链接）——官方源，最稳，主干靠它。
-- ✅ **集思录**（历史 IPO、入场费）、**腾讯行情**（A股价，算 A+H 折价）。
-- ⚠️ **aipo.myiqdii.com**（孖展/基石/评级/暗盘）——**该源目前可能已失效**。`analyze`/`overview` 会自动降级：aipo 挂了就用港交所兜底，并在输出的 `_fallback` / `_data_status` 字段明确告诉你「哪些维度需要 web search 补」。
-- ⚠️ AASTOCKS/雅虎恒指常被反爬/限流，作降级备用。
+**数据源优先级与存活状态**（会变，以实际运行的降级提示为准）：
+- ✅ **AAStocks（阿斯达克）—— 主力源**。`analyze`/`overview` 优先用它，实测可稳定拿到：招股列表、入场费、保荐人、**基石/机构投资者名单+金额**、暗盘日、（招股中后期）孖展。
+- ✅ **港交所披露易**（在招列表、招股书 PDF 链接）——官方源，最稳，招股书主干靠它。
+- ✅ **集思录**（历史 IPO、入场费、保荐人历史战绩）、**腾讯行情**（A股价，算 A+H 折价）。
+- ⚠️ **aipo.myiqdii.com**（孖展/基石/评级/暗盘）—— 降为**备用**。该源易被内网 DNS 屏蔽或反爬失效，仅在 AAStocks 拿不到时才尝试。
+- 🌐 孖展/超购的实时突变，招股中后期若 CLI 未覆盖，一律 web search 补。
+
+**`analyze` / `overview` 数据获取顺序**：**AAStocks（优先）→ aipo（备用）→ 港交所（兜底）→ web search（最终兜底）**。每一级失败都自动降到下一级，并在输出的 `_source` / `_fallback` / `_data_status` 字段标注实际来源与缺口。
 
 > **关键**：看到 CLI 输出里的 `_fallback` 或「请用 web search 兜底」，就必须真的去 web search 补齐那一项，再打分。**绝不能因为某个源挂了就跳过该维度或用记忆编数。**
 
@@ -115,12 +118,12 @@ python3 pdf2md.py <招股书.pdf>
 - **红旗**：上市前突击大额分红、大客户依赖、Pre-IPO 成本极低且解禁期短。
 > 若自检报告提示表格崩坏，关键财务数字要对照原文核对（方案 A 用 pymupdf4llm，复杂表格有局限；需要更强解析可选启用 MinerU，见 README）。
 
-### Step 3 — 抓量化数据（能抓则抓，失效降级）
+### Step 3 — 抓量化数据（能抓则抓，多级降级）
 ```bash
-python3 hkipo.py analyze 02523     # 一键聚合；看输出的 _data_status / _fallback 判断哪些要 web search 补
-python3 hkipo.py ah compare 02523 --price 30.5 --name 永康控股   # A+H 折价（腾讯行情，存活源）
+python3 hkipo.py analyze 00668     # 一键聚合(AAStocks优先)：基本面+保荐人+基石+A+H；看 _data_status/_fallback
+python3 hkipo.py ah compare 00668 --price 99.32 --name 安克创新   # A+H 折价（腾讯行情，存活源）
 ```
-若 `analyze` 显示 aipo 失效，则孖展/基石/评级**转 Step 4 用 web search 补**。
+`analyze` 会优先用 AAStocks 拿保荐人、基石名单、A+H 折价（实测稳定）。**孖展/超购**通常招股中后期才有，若 `_fallback` 标注 margin 缺失，**转 Step 4 用 web search 补**。
 
 ### Step 4 — 联网核查（强制，尤其补 Step 3 失效项）
 必做 web search：
@@ -195,7 +198,7 @@ python3 scripts/hkipo.py profile
 ## 10. Edge cases
 
 - **当前无新股**：如实说「当前无处理中的港股 IPO」，不编造。
-- **aipo 源失效**：`analyze`/`overview` 已自动降级，不会崩；按 `_fallback` 提示用 web search 补孖展/基石/评级。
+- **数据源失效**：`analyze`/`overview` 按 AAStocks→aipo→港交所→web search 多级降级，不会崩；按 `_fallback` 提示用 web search 补缺失项（常见是招股前期孖展未出）。
 - **招股书下载失败**：`fetch_prospectus.py` 会校验并报错、给手动下载链接；改为用户手动下载 PDF。
 - **招股书拿不到**：用 web search + CLI 做分析，并在报告显著位置标注「未读招股书原文，结论置信度下降」。
 - **表格解析崩坏**：pdf2md 自检会提示；关键财务数字对照原文核对，或按 README 启用 MinerU。
@@ -209,7 +212,7 @@ python3 scripts/hkipo.py profile
 | `scripts/fetch_prospectus.py` | 招股书自动下载（港交所官方源 + %PDF 校验） |
 | `scripts/pdf2md.py` | 招股书解析：去噪 + 章节切分 + 表格自检 |
 | `scripts/hkipo.py` | 数据引擎 CLI（analyze/overview/odds/ah 等，含降级兜底） |
-| `scripts/hkipo/` | 数据源适配器（hkex/jisilu/ah 存活；aipo 可能失效） |
+| `scripts/hkipo/` | 数据源适配器（aastocks 主力；hkex/jisilu/ah 存活；aipo 备用） |
 | `references/analysis-guide.md` | 各维度数据怎么看 |
 | `references/ipo-mechanism.md` | 回拨/红鞋/绿鞋/暗盘机制详解 |
 
