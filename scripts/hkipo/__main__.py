@@ -42,54 +42,87 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 
 def show_overview():
-    """显示当前招股 IPO 概览（纯数据，不做筛选判断）"""
-    from aipo import fetch_margin_list, fetch_ipo_brief
-    
-    print("=" * 60)
-    print("当前招股 IPO 一览")
-    print("=" * 60)
-    
+    """显示当前招股 IPO 概览（纯数据，不做筛选判断）。
+    优先用 aipo（含孖展热度）；aipo 失效则降级到港交所在审列表 + 集思录入场费。"""
+
+    # --- 首选：aipo 孖展列表（含热度）---
     try:
+        from aipo import fetch_margin_list, fetch_ipo_brief
         ipos = fetch_margin_list()
-        if not ipos:
-            print("当前无招股中的 IPO")
+        if ipos:
+            print("=" * 60)
+            print("当前招股 IPO 一览（数据源：aipo，含孖展热度）")
+            print("=" * 60)
+            ipos.sort(key=lambda x: x.total_margin if hasattr(x, 'total_margin') else 0, reverse=True)
+            for ipo in ipos:
+                code = ipo.code if hasattr(ipo, 'code') else ipo.get('code', '')
+                name = ipo.name if hasattr(ipo, 'name') else ipo.get('name', '')
+                margin = ipo.total_margin if hasattr(ipo, 'total_margin') else ipo.get('total_margin', 0)
+                listing = ipo.listing_date if hasattr(ipo, 'listing_date') else ipo.get('listing_date', '')
+                min_cap = 0
+                pe = 0
+                industry = ''
+                try:
+                    brief = fetch_ipo_brief(code)
+                    if brief:
+                        min_cap = brief.get('minimum_capital', 0) if isinstance(brief, dict) else getattr(brief, 'minimum_capital', 0)
+                        pe = brief.get('pe', 0) if isinstance(brief, dict) else getattr(brief, 'pe', 0)
+                        industry = brief.get('industry', '') if isinstance(brief, dict) else getattr(brief, 'industry', '')
+                except (KeyError, TypeError, AttributeError):
+                    pass
+                print(f"\n📈 {name} ({code})")
+                print(f"   孖展: {margin:.2f} 亿港元")
+                print(f"   上市日期: {listing}")
+                if min_cap:
+                    print(f"   入场费: {min_cap:.0f} 港元")
+                if pe:
+                    print(f"   PE: {pe:.1f}x")
+                if industry:
+                    print(f"   行业: {industry}")
+            print("\n" + "=" * 60)
             return
-        
-        # 按孖展金额排序
-        ipos.sort(key=lambda x: x.total_margin if hasattr(x, 'total_margin') else 0, reverse=True)
-        
-        for ipo in ipos:
-            code = ipo.code if hasattr(ipo, 'code') else ipo.get('code', '')
-            name = ipo.name if hasattr(ipo, 'name') else ipo.get('name', '')
-            margin = ipo.total_margin if hasattr(ipo, 'total_margin') else ipo.get('total_margin', 0)
-            listing = ipo.listing_date if hasattr(ipo, 'listing_date') else ipo.get('listing_date', '')
-            
-            # 获取入场费
-            min_cap = 0
-            pe = 0
-            industry = ''
-            try:
-                brief = fetch_ipo_brief(code)
-                if brief:
-                    min_cap = brief.get('minimum_capital', 0) if isinstance(brief, dict) else getattr(brief, 'minimum_capital', 0)
-                    pe = brief.get('pe', 0) if isinstance(brief, dict) else getattr(brief, 'pe', 0)
-                    industry = brief.get('industry', '') if isinstance(brief, dict) else getattr(brief, 'industry', '')
-            except (KeyError, TypeError, AttributeError):
-                pass
-            
-            print(f"\n📈 {name} ({code})")
-            print(f"   孖展: {margin:.2f} 亿港元")
-            print(f"   上市日期: {listing}")
-            if min_cap:
-                print(f"   入场费: {min_cap:.0f} 港元")
-            if pe:
-                print(f"   PE: {pe:.1f}x")
-            if industry:
-                print(f"   行业: {industry}")
-        
-        print("\n" + "=" * 60)
     except Exception as e:
-        print(f"获取数据失败: {e}")
+        print(f"⚠️  aipo 数据源不可用（{type(e).__name__}），自动降级到港交所在审列表。\n")
+
+    # --- 降级：港交所在审 IPO（官方源，最稳）+ 集思录入场费 ---
+    try:
+        from hkex import fetch_hkex_active_ipos_sync, get_prospectus_url
+        actives = fetch_hkex_active_ipos_sync()
+    except Exception as e:
+        print(f"❌ 港交所数据源也不可用（{type(e).__name__}）。请改用 web search 查询在招港股新股。")
+        return
+
+    # 集思录入场费（可选增强，挂了不影响）
+    fee_map = {}
+    try:
+        from jisilu import fetch_jisilu_history
+        for h in fetch_jisilu_history(limit=60):
+            c = str(h.get("code") or "").zfill(5)
+            if c and h.get("entry_fee"):
+                fee_map[c] = h.get("entry_fee")
+    except Exception:
+        pass
+
+    print("=" * 60)
+    print("当前处理中的 IPO（数据源：港交所披露易，官方兜底）")
+    print("=" * 60)
+    if not actives:
+        print("当前无处理中的 IPO。")
+        return
+    for ipo in actives[:25]:
+        phip = "✓有聆讯后资料" if ipo.has_phip else "✗仅申请版本"
+        print(f"\n📄 {ipo.name}")
+        print(f"   提交日期: {ipo.submit_date} | 板块: {ipo.board} | {phip}")
+        if ipo.stock_code:
+            code5 = str(ipo.stock_code).zfill(5)
+            print(f"   股票代码: {ipo.stock_code}")
+            if code5 in fee_map:
+                print(f"   入场费(集思录): {fee_map[code5]} 港元")
+        url = get_prospectus_url(ipo)
+        if url:
+            print(f"   招股书: {url}")
+    print("\n" + "=" * 60)
+    print("💡 孖展/超购/暗盘等实时热度数据需 web search 补充（aipo 源当前不可用）。")
 
 
 def main():
@@ -309,24 +342,36 @@ def main():
                 print()
     
     elif module == 'analyze':
-        # 一键分析单只 IPO
+        # 一键分析单只 IPO（每个数据源独立降级，任一源失效都不影响其他源）
         import json
         if not remaining_args:
             print("用法: ./hkipo analyze <代码>")
             sys.exit(1)
         code = remaining_args[0]
-        
-        from aipo import fetch_ipo_brief, fetch_margin_detail, fetch_cornerstone_investors, fetch_rating_detail
+
         from jisilu import fetch_jisilu_history
         from ah import fetch_ah_comparison
-        
+
         result = {"code": code}
-        
-        # 基本信息
-        brief = fetch_ipo_brief(code)
+        # 降级台账：记录每个数据源的状态，AI 据此判断哪些维度需要 web search 兜底
+        fallback = {}
+
+        def _try(source_name, fn):
+            """执行取数，失败不抛异常，只在 fallback 台账里标记，让 AI 走 web search。"""
+            try:
+                return fn()
+            except Exception as e:  # noqa: BLE001 —— 单源失效不能拖垮整个 analyze
+                fallback[source_name] = f"数据源不可用（{type(e).__name__}），此项请用 web search 兜底"
+                return None
+
+        # --- 基本信息 / 孖展 / 基石 / 评级：均来自 aipo（可能已失效）---
+        def _aipo_brief():
+            from aipo import fetch_ipo_brief
+            return fetch_ipo_brief(code)
+        brief = _try("brief", _aipo_brief)
         if brief:
             result["brief"] = {
-                "name": brief.get("principal_activities", "")[:50],  # 用主营业务代替名称
+                "name": brief.get("principal_activities", "")[:50],
                 "industry": brief.get("industry"),
                 "pe": brief.get("pe"),
                 "market_cap": brief.get("market_cap"),
@@ -335,9 +380,11 @@ def main():
                 "sponsors": brief.get("sponsors"),
                 "listing_date": brief.get("listing_date"),
             }
-        
-        # 孖展
-        margin = fetch_margin_detail(code)
+
+        def _aipo_margin():
+            from aipo import fetch_margin_detail
+            return fetch_margin_detail(code)
+        margin = _try("margin", _aipo_margin)
         if margin:
             result["margin"] = {
                 "total_billion": margin.total_margin,
@@ -345,36 +392,38 @@ def main():
                 "top_amount_billion": margin.broker_margins[0].margin_amount if margin.broker_margins else None,
                 "broker_count": len(margin.broker_margins),
             }
-        
-        # 基石投资者
-        cornerstone = fetch_cornerstone_investors(code)
+
+        def _aipo_cornerstone():
+            from aipo import fetch_cornerstone_investors
+            return fetch_cornerstone_investors(code)
+        cornerstone = _try("cornerstone", _aipo_cornerstone)
         if cornerstone:
             result["cornerstone"] = {
                 "count": len(cornerstone),
                 "total_pct": round(sum(c.shareholding_pct for c in cornerstone), 2),
                 "top_investors": [{"name": c.name, "pct": c.shareholding_pct} for c in cornerstone[:3]],
             }
-        
-        # 评级
-        ratings = fetch_rating_detail(code)
+
+        def _aipo_rating():
+            from aipo import fetch_rating_detail
+            return fetch_rating_detail(code)
+        ratings = _try("rating", _aipo_rating)
         if ratings:
             avg_score = sum(r.score for r in ratings) / len(ratings)
             result["rating"] = {"avg_score": round(avg_score, 1), "count": len(ratings)}
-        else:
+        elif "rating" not in fallback:
             result["rating"] = {"note": "暂无评级（通常招股后期发布）"}
-        
-        # 保荐人历史
+
+        # --- 保荐人历史：集思录（存活源），brief 拿不到时尝试从命令行/其他途径补 ---
+        sponsor = None
         if brief and brief.get("sponsors"):
             sponsor = brief["sponsors"][0] if isinstance(brief["sponsors"], list) else str(brief["sponsors"])
-            # 用逗号分隔的第一个保荐人
             sponsor = sponsor.split(",")[0].strip()
-            
-            # 从 jisilu 获取历史
-            history = fetch_jisilu_history(limit=50)
+
+        history = _try("jisilu_history", lambda: fetch_jisilu_history(limit=50))
+        if sponsor and history:
             sponsor_history = [h for h in history if sponsor in (h.get("underwriter") or "")]
-            
             result["sponsor_history"] = {"sponsor": sponsor}
-            
             if sponsor_history:
                 returns = [h.get("first_day_return") for h in sponsor_history if h.get("first_day_return")]
                 avg_return = sum(returns) / len(returns) if returns else None
@@ -384,41 +433,37 @@ def main():
                 }
                 if len(sponsor_history) < 3:
                     result["sponsor_history"]["jisilu"]["note"] = "样本不足，仅供参考"
-            
-            # 从 bookrunner-rank 获取胜率
-            try:
-                from aipo import fetch_bookrunner_ranking
-                rankings = fetch_bookrunner_ranking(start_date="2024-01-01", end_date="2025-12-31")
-                for r in rankings:
-                    if sponsor in r.get("name", ""):
-                        count = r.get("count", 0)
-                        grey_rise = r.get("grey_rise_count", 0)
-                        first_day_rise = r.get("first_day_rise_count", 0)
-                        result["sponsor_history"]["aipo_rank"] = {
-                            "ipo_count": count,
-                            "grey_win_rate": round(grey_rise / count * 100, 1) if count else None,
-                            "first_day_win_rate": round(first_day_rise / count * 100, 1) if count else None,
-                        }
-                        break
-            except (ImportError, KeyError, TypeError, ZeroDivisionError):
-                pass
-        
-        # A+H 折价
+        elif sponsor is None:
+            fallback["sponsor_history"] = "无法从 aipo 获取保荐人名称，请用 web search 查保荐人及其历史战绩"
+
+        # --- A+H 折价：腾讯/新浪行情（存活源），仅当已知发行价时计算 ---
         if brief:
             name = brief.get("principal_activities", "")[:10]
             price = brief.get("ipo_price_ceiling") or brief.get("ipo_pricing")
             if price and price != "--":
-                try:
-                    ah = fetch_ah_comparison(code, float(price), name)
-                    if ah and ah.get("a_price"):
-                        result["ah_premium"] = {
-                            "a_price": ah["a_price"],
-                            "h_price_estimate": ah["h_price"],
-                            "premium_pct": ah["premium_pct"],
-                        }
-                except (ValueError, TypeError, KeyError):
-                    pass
-        
+                def _ah():
+                    return fetch_ah_comparison(code, float(price), name)
+                ah = _try("ah_premium", _ah)
+                if ah and ah.get("a_share", {}).get("price_cny"):
+                    result["ah_premium"] = {
+                        "a_price_cny": ah["a_share"]["price_cny"],
+                        "a_code": ah["a_share"]["code"],
+                        "h_price_hkd": ah["h_share"]["price_hkd"],
+                        "h_price_cny": ah["h_share"]["price_cny"],
+                        "discount_pct": ah["discount_pct"],
+                    }
+
+        # --- 汇总降级台账 + 数据完整度提示 ---
+        if fallback:
+            result["_fallback"] = fallback
+        got = [k for k in ("brief", "margin", "cornerstone", "rating", "sponsor_history", "ah_premium") if k in result]
+        if not got:
+            result["_data_status"] = "❌ 所有 CLI 数据源均未取到数据（很可能 aipo 源已失效）。请完全依赖招股书精读 + web search 进行 6D 分析。"
+        elif fallback:
+            result["_data_status"] = f"⚠️ 部分数据源失效：{list(fallback.keys())}。已取到：{got}。失效项请用 web search 补齐后再打分。"
+        else:
+            result["_data_status"] = f"✅ CLI 数据完整：{got}"
+
         print(json.dumps(result, ensure_ascii=False, indent=2))
     
     elif module == 'profile':

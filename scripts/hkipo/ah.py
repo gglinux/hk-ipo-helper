@@ -4,9 +4,14 @@ import re
 import urllib.parse
 import httpx
 
-from opencc import OpenCC
-
-_t2s = OpenCC("t2s").convert
+# opencc 为软依赖：用于繁→简转换以提高 A 股搜索命中率。
+# 缺失时降级为「不转换」，功能照常（只是繁体公司名可能搜不到 A 股）。
+try:
+    from opencc import OpenCC
+    _t2s = OpenCC("t2s").convert
+except Exception:  # noqa: BLE001
+    def _t2s(text: str) -> str:
+        return text
 
 CNY_HKD_RATE = 1.12
 

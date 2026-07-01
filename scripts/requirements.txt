@@ -1,6 +1,11 @@
+# 核心依赖（方案 A：轻量稳妥，开箱即用）
 httpx>=0.27
 requests>=2.31
 beautifulsoup4>=4.12
 lxml>=5.1
 pyyaml>=6.0
 pymupdf4llm>=0.0.17
+
+# 可选依赖：opencc 用于 A+H 折价时繁→简公司名转换，缺失会自动降级（不影响其他功能）
+# 注意：如遇 numpy/onnxruntime 架构不匹配（arm64 mac），可跳过本项
+# opencc>=1.1

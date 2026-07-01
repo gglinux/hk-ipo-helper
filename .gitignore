@@ -14,10 +14,9 @@ scripts/hkipo/.cache/
 *.cache
 cache/
 analysis/*.md
-prospectus/*.md
-prospectus/*.pdf
-report_*.html
-ipo_*.html
+prospectus/
+*.key.md
+*.pdf
 
 # 系统
 .DS_Store
