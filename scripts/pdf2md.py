@@ -173,8 +173,40 @@ def check_table_quality(md: str) -> list[str]:
     return warnings
 
 
+def _extract_by_text_window(md: str) -> tuple[str, set]:
+    """回退切分：当 md 里关键章节标题没被识别成 `#` 时，
+    直接在正文里定位关键词行，从该行起截取一段窗口作为章节内容。"""
+    lines = md.split("\n")
+    picked: list[str] = []
+    hit_labels: set = set()
+    used_ranges: list[tuple[int, int]] = []
+    # 每个关键章节大致截取的行数窗口（招股书正文段落较长）
+    WINDOW = 260
+
+    for label, kws in KEY_SECTION_KEYWORDS.items():
+        for i, line in enumerate(lines):
+            ls = line.strip()
+            # 跳过目录点线行（形如「風險因素 . . . . 24」）与过短行
+            if not ls or ls.count(".") > 8 or len(ls) > 40:
+                continue
+            if any(kw.upper() in ls.upper() for kw in kws):
+                # 需像标题（该行基本等于关键词，而非长句里偶然包含）
+                if not any(ls.replace(" ", "").upper().startswith(kw.replace(" ", "").upper()[:4]) for kw in kws):
+                    continue
+                start = i
+                end = min(len(lines), i + WINDOW)
+                # 避免与已截取窗口大量重叠
+                if any(s <= start <= e for s, e in used_ranges):
+                    continue
+                used_ranges.append((start, end))
+                picked.append(f"\n\n<!-- ===== 关键章节(文本回退)：{label} ===== -->\n" + "\n".join(lines[start:end]))
+                hit_labels.add(label)
+                break
+    return "".join(picked), hit_labels
+
+
 def extract_key_sections(md: str) -> str:
-    """按标题切分，抽取打新决策关键章节。"""
+    """按标题切分，抽取打新决策关键章节。若 `#` 标题切分命中 0 章，回退到正文关键词窗口切分。"""
     lines = md.split("\n")
     header_re = re.compile(r"^(#+)\s*(.*)")
     sections: list[tuple[str, int, list[str]]] = []  # (标题, 级别, 内容行)
@@ -204,8 +236,17 @@ def extract_key_sections(md: str) -> str:
                 hit_labels.add(label)
                 break
 
+    fallback_note = ""
+    # 回退：#标题切分命中过少（招股书至少应命中财务/风险等），改用正文关键词窗口
+    if len(hit_labels) == 0:
+        text_body, text_labels = _extract_by_text_window(md)
+        if text_labels:
+            picked.append(text_body)
+            hit_labels = text_labels
+            fallback_note = "（⚠️ 该PDF标题未被识别为markdown标题，已用正文关键词窗口回退切分，边界可能不精确）"
+
     header = "# 招股书关键章节摘录（打新决策用）\n\n"
-    header += f"> 命中章节：{', '.join(sorted(hit_labels)) if hit_labels else '无（标题切分未命中，请读全文.md）'}\n"
+    header += f"> 命中章节：{', '.join(sorted(hit_labels)) if hit_labels else '无（标题与正文切分均未命中，请读全文.md）'}{fallback_note}\n"
     header += "> ⚠️ 本文件仅为关键章节抽取，完整内容以 全文.md 与招股书原文为准。\n"
     return header + "".join(picked)
 

@@ -419,6 +419,9 @@ def main():
                     "count": len(inv),
                     "investors": [{"name": i.get("name"), "type": i.get("type"), "amount": i.get("amount")} for i in inv[:8]],
                 }
+            else:
+                # 无基石是重大信号（影响 D3 权重20% + 闸门「无实质基石」判定），必须显式提示，不能静默省略
+                fallback["cornerstone"] = "AAStocks 未登记基石投资者。请用 web search 确认是『确实无基石认购』（D3应显著扣分/触发闸门）还是『数据未更新』"
             # 孖展
             md = aa.get("margin_data") or []
             if md:
