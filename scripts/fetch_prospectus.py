@@ -96,16 +96,36 @@ def _download_pdf(url: str, out_path: str) -> tuple[bool, str]:
     return True, f"已保存 {len(content) // 1024} KB"
 
 
-def download(keyword: str | None, ipo_id: int | None, out_dir: str) -> int:
+def download(keyword: str | None, ipo_id: int | None, out_dir: str,
+             url: str | None = None, out_name: str | None = None) -> int:
+    # --- 方式一：用户直接提供招股书 URL（最可靠，绕过港交所链接失效问题）---
+    if url:
+        fname = _safe_filename(out_name or keyword or "prospectus")
+        out_path = os.path.join(out_dir, f"{fname}.pdf")
+        print(f"⬇️  正在下载（用户提供链接）：\n    {url}")
+        ok, msg = _download_pdf(url, out_path)
+        if ok:
+            print(f"✅ {msg} -> {out_path}")
+            print(f"下一步：python3 pdf2md.py {out_path}")
+            return 0
+        print(f"❌ 下载失败：{msg}\n👉 请确认链接可访问，或在浏览器手动下载。")
+        return 1
+
     ipos = fetch_hkex_active_ipos_sync()
 
     target = None
     if ipo_id is not None:
+        # ipo_id 可能是披露易 ID（108670）或股票代码（6880/06880），两者都尝试
         target = next((x for x in ipos if x.id == ipo_id), None)
+        if target is None:
+            id_str = str(ipo_id).zfill(5)
+            target = next((x for x in ipos if x.stock_code and str(x.stock_code).zfill(5) == id_str), None)
     elif keyword:
-        matches = [x for x in ipos if keyword in x.name]
+        # 大小写不敏感匹配（港交所列表里公司名可能全大写，如 MOMENTA）
+        kw = keyword.lower()
+        matches = [x for x in ipos if kw in x.name.lower()]
         if len(matches) > 1:
-            print(f"⚠️ 「{keyword}」匹配到多个，请用 --id 指定：")
+            print(f"⚠️ 「{keyword}」匹配到多个，请用 --id 指定披露易 ID：")
             for x in matches:
                 print(f"  id={x.id} | {x.name}")
             return 2
@@ -113,6 +133,7 @@ def download(keyword: str | None, ipo_id: int | None, out_dir: str) -> int:
 
     if target is None:
         print(f"❌ 未找到匹配的 IPO（keyword={keyword}, id={ipo_id}）。先用 --list 查看。")
+        print("💡 若已知招股书链接，可用 --url <链接> --name <公司名> 直接下载。")
         return 1
 
     url = get_prospectus_url(target)
@@ -129,22 +150,29 @@ def download(keyword: str | None, ipo_id: int | None, out_dir: str) -> int:
         return 0
     else:
         print(f"❌ 下载失败：{msg}")
-        print(f"👉 请在浏览器手动打开并下载，再用 pdf2md.py 解析：\n    {url}")
+        print("   注：港交所 appactive 接口给的常是「申请版本」链接，公司正式招股后招股书会迁到")
+        print("   www1.hkexnews.hk/listedco/listconews/ 路径，旧链接会 404。")
+        print(f"👉 解决办法（二选一）：")
+        print(f"   1. 浏览器打开港交所披露易搜索该公司，复制正式招股书 PDF 链接，再用：")
+        print(f"      python3 fetch_prospectus.py --url <链接> --name {_safe_filename(target.name)}")
+        print(f"   2. 手动下载后直接：python3 pdf2md.py <本地PDF路径>")
+        print(f"   （失效链接：{url}）")
         return 1
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="港股招股书自动下载器（港交所官方源）")
+    p = argparse.ArgumentParser(description="港股招股书下载器（港交所官方源 + 用户直传链接）")
     p.add_argument("--list", action="store_true", help="列出当前处理中的 IPO 及招股书链接")
-    p.add_argument("--name", help="按公司名关键词下载")
-    p.add_argument("--id", type=int, help="按港交所披露易 ID 下载")
+    p.add_argument("--name", help="按公司名关键词下载（大小写不敏感）；配合 --url 时作为文件名")
+    p.add_argument("--id", type=int, help="按港交所披露易 ID 或股票代码下载")
+    p.add_argument("--url", help="直接指定招股书 PDF 链接下载（最可靠，绕过港交所链接失效）")
     p.add_argument("--out", default="./prospectus", help="输出目录（默认 ./prospectus）")
     args = p.parse_args()
 
-    if args.list or (not args.name and args.id is None):
+    if args.list or (not args.name and args.id is None and not args.url):
         list_active()
         return 0
-    return download(args.name, args.id, args.out)
+    return download(args.name, args.id, args.out, url=args.url, out_name=args.name)
 
 
 if __name__ == "__main__":
