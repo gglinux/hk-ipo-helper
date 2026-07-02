@@ -222,47 +222,58 @@ def expected_value(inp: EVInput) -> EVResult:
 
 
 def evaluate_one(payload: dict) -> dict:
-    """单只票：闸门判定 + 一手/多手期望值。payload 见文件顶部示例。"""
+    """单只票：破发闸门(第一道) → 其他闸门 → 三种申购方式期望值。payload 见文件顶部示例。"""
+    result = {"name": payload.get("name"), "code": payload.get("code")}
+
+    # ========== 第一道生死闸门：破发概率（前置于一切）==========
+    # 若 payload 带了破发因子（peer_first_day_avg_pct 等），先跑破发引擎。
+    break_result = None
+    break_factor_keys = (
+        "peer_first_day_avg_pct", "peer_break_count", "peer_total_count",
+        "hsi_change_pct", "sector_change_pct", "is_break_wave",
+        "cornerstone_pct", "oversubscription",
+        "sponsor_is_tier1", "has_greenshoe", "is_profitable", "priced_at_premium",
+    )
+    if any(payload.get(k) is not None for k in break_factor_keys):
+        try:
+            from breakeven_predictor import predict_break
+            break_result = predict_break(payload)
+            result["break_analysis"] = break_result
+            # 破发红灯：直接撤退，不再往下算
+            if break_result.get("gate_pass") is False:
+                result["gate_passed"] = False
+                result["verdict"] = "撤退 (Avoid/Skip)"
+                result["reason"] = f"破发闸门未过：{break_result.get('gate')}（破发概率 {break_result.get('break_probability_range')}）"
+                return result
+            # 未手填首日涨幅期望时，用破发模型反推的中值自动填充（打通链路，不再手填）
+            if payload.get("expected_first_day_pct") is None and break_result.get("expected_first_day_mid_pct") is not None:
+                payload = {**payload, "expected_first_day_pct": break_result["expected_first_day_mid_pct"]}
+                result["_first_day_source"] = f"由破发引擎反推（{break_result.get('expected_first_day_range_pct')}），非手填"
+        except Exception as e:  # noqa: BLE001
+            result["break_analysis"] = {"error": f"破发引擎调用失败：{type(e).__name__}"}
+
+    # ========== 其他一票否决闸门 ==========
     gate = GateInput(**{k: payload.get(k) for k in GateInput.__annotations__})
-
-    # 闸门先行
-    be_for_gate = None
-    if all(payload.get(k) is not None for k in ("entry_fee", "lot_market_value")):
-        be_for_gate = breakeven_pct(payload["entry_fee"], 1, payload["lot_market_value"])
-    gate.breakeven_pct = be_for_gate
-    gate_failures = check_gates(gate)
-
-    result = {
-        "name": payload.get("name"),
-        "code": payload.get("code"),
-        "gate_passed": len(gate_failures) == 0,
-        "gate_failures": gate_failures,
-    }
-    if gate_failures:
-        result["verdict"] = "撤退 (Avoid/Skip)"
-        result["reason"] = "触发一票否决闸门，无论 6D 质量分多高都不参与。"
-        return result
-
-def evaluate_one(payload: dict) -> dict:
-    """单只票：闸门判定 + 三种申购方式（现金/富途融资/银行融资）期望值对比。"""
-    gate = GateInput(**{k: payload.get(k) for k in GateInput.__annotations__})
-
-    # 闸门先行（用现金一手的盈亏平衡线判成本闸门）
     be_for_gate = None
     if all(payload.get(k) is not None for k in ("entry_fee", "lot_market_value")):
         be_for_gate = breakeven_pct(payload["entry_fee"], 1, payload["lot_market_value"], funding="cash")
     gate.breakeven_pct = be_for_gate
     gate_failures = check_gates(gate)
 
-    result = {
-        "name": payload.get("name"),
-        "code": payload.get("code"),
-        "gate_passed": len(gate_failures) == 0,
-        "gate_failures": gate_failures,
-    }
+    result["gate_passed"] = len(gate_failures) == 0
+    result["gate_failures"] = gate_failures
     if gate_failures:
         result["verdict"] = "撤退 (Avoid/Skip)"
         result["reason"] = "触发一票否决闸门，无论 6D 质量分多高都不参与。"
+        return result
+
+    # 期望值计算所需的关键输入兜底（缺失则明确提示，不崩溃）
+    need = ("entry_fee", "lot_market_value", "win_rate_1lot", "expected_first_day_pct")
+    lack = [k for k in need if payload.get(k) is None]
+    if lack:
+        result["verdict"] = "数据不足，无法算期望值"
+        result["reason"] = (f"缺少 {lack}。其中 expected_first_day_pct 可由破发引擎自动反推"
+                            f"（在 payload 里补同赛道/大盘/基石等破发因子即可），其余请从 analyze/odds 补齐。")
         return result
 
     days = payload.get("margin_days", DEFAULT_MARGIN_DAYS)
@@ -285,6 +296,12 @@ def evaluate_one(payload: dict) -> dict:
     result["scenarios"] = scenarios
     cash1 = scenarios["现金一手"]
     result["verdict"] = _verdict_from_ev(cash1["annualized_return_pct"], cash1["expected_net_hkd"])
+    # 破发黄灯约束：破发概率中等偏高时，结论封顶为"现金摸鱼"，不允许"全力出击"（消除信号矛盾）
+    if break_result and break_result.get("break_probability_pct") is not None:
+        bp = break_result["break_probability_pct"]
+        if 40 <= bp < 55 and "全力出击" in result["verdict"]:
+            result["verdict"] = ("现金摸鱼 (Cash Only)：期望值虽高，但破发概率中等偏高"
+                                 f"（{break_result.get('break_probability_range')}）→ 仅现金一手/多户，首日见好就收，不加码不融资")
     # 提示最优申购方式
     best = max(scenarios.items(), key=lambda kv: kv[1]["expected_net_hkd"])
     result["best_funding"] = f"{best[0]}（期望净收益 {best[1]['expected_net_hkd']} 港元，年化 {best[1]['annualized_return_pct']}%）"
