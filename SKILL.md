@@ -163,13 +163,25 @@ python3 decision_engine.py portfolio --capital 30000 --json '[{...},{...}]'
 
 **⓪ 破发概率引擎 D_break（第一道生死闸门，最重要）**：`breakeven_predictor.py`
 ```bash
-python3 breakeven_predictor.py --json '{"name":"MOMENTA-W","code":"06880","peer_first_day_avg_pct":-8,"peer_break_count":2,"peer_total_count":3,"hsi_change_pct":0.76,"sector_change_pct":-3,"cornerstone_pct":50,"oversubscription":36,"sponsor_is_tier1":true,"has_greenshoe":true,"is_profitable":false,"priced_at_premium":true}'
+python3 breakeven_predictor.py --json '{"name":"MOMENTA-W","code":"06880","valuation_discount_pct":-15,"pricing_position":"top","preipo_multiple":2.5,"first_day_float_yi":5.89,"win_rate_1lot_pct":18,"public_offer_pct":10,"cornerstone_pct":50,"cornerstone_grade":"gold","sponsor_break_rate_pct":20,"has_greenshoe":true,"peer_first_day_avg_pct":-8,"peer_break_count":2,"peer_total_count":3,"hsi_change_pct":0.76,"sector_change_pct":-3,"vhsi":20,"oversubscription":36}'
 ```
-六因子加权输出**破发概率区间**（同赛道近期首日表现30% 最强、大盘/板块水位20%、基石锁定20%、超购热度U型15%、保荐人+绿鞋10%、估值5%）：
+**v3 七因子**加权输出**破发概率区间**，按第一性原理四层组织（定价根因 → 首日货源 → 承接力 → 市场β → 情绪）：
+
+| 因子 | 权重 | 说明 |
+|------|:----:|------|
+| 定价与折溢价（根因） | 12% | 发行PE/行业PE折溢价 + 顶格/下限/超区间定价 |
+| Pre-IPO倍数 + 老股套现 | 8% | 顺挂高倍(解禁抛压)与真倒挂(流血上市)两个相反机制都利空 |
+| 首日流通市值（哑铃U型） | 15% | 两端危险中间安全；微盘只加宽区间不上移中心 |
+| 货源分散度 | 12% | 一手中签率 + 公开发售比例 + 回拨机制A/B |
+| 承接力量 | 18% | 基石(比例×成色) + 保荐人历史破发率 + 绿鞋/稳价 |
+| 市场环境β（合并单一因子） | 22% | 同赛道近期首日 + 大盘/板块水位 + VHSI + 破发潮（合并根治共线） |
+| 超购热度（U型） | 13% | 过冷/过热两端都易破 |
+
 - 🔴 破发概率 ≥55% → **红灯，直接撤退**，不再往下算。
 - 🟡 40-55% → 黄灯，仅现金白嫖一手、见好就收（结论封顶「现金摸鱼」，禁止「全力出击」）。
 - 🟢 <40% → 绿灯，进入后续评估。
 - **联动 D7**：本引擎反推「首日涨幅期望区间」中值，**自动填给 D7 的 `expected_first_day_pct`**，消除原来手填这一薄弱环节。`decision_engine.py eval` 只要 payload 带破发因子就会自动先跑它。
+- **暗盘 override**：提供 `dark_pool_pct` 时直接覆盖模型预测的首日期望（暗盘是首日破发相关性最高的领先指标），暗盘破发则按破发跑。
 - 因子支持「未知」：缺失则该因子权重按比例归一并标注 `missing_factors`，绝不脑补。
 
 **① 一票否决闸门**：任一命中直接判 SKIP，无视 6D 总分——
@@ -235,7 +247,7 @@ python3 scripts/hkipo.py profile
 
 ## 🚦 破发概率（第一道生死闸门，最重要）
 - 破发概率：XX%（区间 XX-XX%），红/黄/绿灯
-- 主导因子：同赛道近期表现 / 大盘水位 / 基石锁定 …（列压力最高的2-3项）
+- 主导因子：定价折溢价 / 首日流通市值 / 承接力量 / 市场环境β …（列压力最高的2-3项）
 - 反推首日涨幅期望：XX%~XX%（喂给 D7）
 - 闸门结论：[🔴红灯直接撤退 / 🟡黄灯白嫖一手 / 🟢绿灯继续评估]
 

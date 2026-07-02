@@ -229,10 +229,23 @@ def evaluate_one(payload: dict) -> dict:
     # 若 payload 带了破发因子（peer_first_day_avg_pct 等），先跑破发引擎。
     break_result = None
     break_factor_keys = (
+        # A 定价/价值（根因）
+        "valuation_discount_pct", "issue_pe", "industry_pe", "pricing_position",
+        "priced_at_premium", "is_profitable",
+        "preipo_multiple", "old_share_pct",
+        # B 首日货源供给
+        "first_day_float_yi",
+        "win_rate_1lot_pct", "public_offer_pct", "clawback_mechanism",
+        # C 承接力量
+        "cornerstone_pct", "cornerstone_grade", "sponsor_break_rate_pct",
+        "sponsor_is_tier1", "has_greenshoe",
+        # D 市场环境β（合并）
         "peer_first_day_avg_pct", "peer_break_count", "peer_total_count",
-        "hsi_change_pct", "sector_change_pct", "is_break_wave",
-        "cornerstone_pct", "oversubscription",
-        "sponsor_is_tier1", "has_greenshoe", "is_profitable", "priced_at_premium",
+        "hsi_change_pct", "sector_change_pct", "vhsi", "is_break_wave",
+        # E 情绪
+        "oversubscription",
+        # 覆盖锚
+        "dark_pool_pct",
     )
     if any(payload.get(k) is not None for k in break_factor_keys):
         try:
