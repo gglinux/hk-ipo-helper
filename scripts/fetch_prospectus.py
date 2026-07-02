@@ -47,6 +47,70 @@ HEADERS = {
     "Referer": "https://www.hkexnews.hk/",
 }
 
+# 港交所标题搜索 servlet（正式披露 listconews 的可靠来源）
+TITLE_SEARCH_URL = "https://www1.hkexnews.hk/search/titleSearchServlet.do"
+HKEX_BASE = "https://www1.hkexnews.hk"
+# 招股书类公告标题关键词（正式招股后发布在 listconews 路径）
+PROSPECTUS_TITLE_KEYWORDS = ["全球發售", "股份發售", "招股章程", "發售通函", "招股章程及配發結果"]
+
+
+def search_prospectus_via_titlesearch(stock_code: str, days_back: int = 30) -> list[dict]:
+    """通过港交所 titlesearch servlet 按股票代码查正式招股书（listconews 路径）。
+
+    这是自动探测正式招股书的可靠方式：appactive 接口只给「申请版本」链接（正式招股后会 404），
+    而公司正式招股后招股书发布在 /listedco/listconews/ 路径，只能通过本搜索接口拿到。
+
+    Args:
+        stock_code: 港股代码，如 "6880" / "06880"
+        days_back: 往前搜索的天数窗口（默认 30 天，覆盖整个招股周期）
+
+    Returns:
+        匹配的招股书文档列表，每项含 {title, date, url, stock_name}，按日期倒序。
+    """
+    import json
+    from datetime import datetime, timedelta
+
+    code_norm = stock_code.replace(".HK", "").replace(".hk", "").strip().zfill(5)
+    today = datetime.now()
+    from_date = (today - timedelta(days=days_back)).strftime("%Y%m%d")
+    to_date = today.strftime("%Y%m%d")
+
+    params = {
+        "sortDir": "0", "sortByOptions": "DateTime", "category": "0",
+        "market": "SEHK", "stockId": "-1", "documentType": "-1",
+        "fromDate": from_date, "toDate": to_date, "title": "",
+        "searchType": "0", "t": "1", "lang": "ZH", "rowRange": "3000",
+    }
+    try:
+        with httpx.Client(follow_redirects=True, timeout=30, headers=HEADERS) as client:
+            resp = client.get(TITLE_SEARCH_URL, params=params)
+            resp.raise_for_status()
+            outer = resp.json()
+            records = json.loads(outer.get("result", "[]"))
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️  titlesearch 查询失败（{type(e).__name__}），无法自动探测正式招股书链接。", file=sys.stderr)
+        return []
+
+    hits = []
+    for r in records:
+        sc = str(r.get("STOCK_CODE", "")).zfill(5)
+        title = r.get("TITLE", "")
+        link = r.get("FILE_LINK", "")
+        if sc != code_norm:
+            continue
+        # 只要 PDF 招股书类文档
+        if not link.lower().endswith(".pdf"):
+            continue
+        if any(k in title for k in PROSPECTUS_TITLE_KEYWORDS):
+            hits.append({
+                "title": title,
+                "date": r.get("DATE_TIME", ""),
+                "url": HKEX_BASE + link if link.startswith("/") else link,
+                "stock_name": r.get("STOCK_NAME", ""),
+                "size": r.get("FILE_INFO", ""),
+            })
+    return hits
+
 
 def _safe_filename(name: str) -> str:
     """把公司名清洗成安全文件名。"""
@@ -96,9 +160,34 @@ def _download_pdf(url: str, out_path: str) -> tuple[bool, str]:
     return True, f"已保存 {len(content) // 1024} KB"
 
 
+def _download_via_titlesearch(stock_code: str, out_dir: str, out_name: str | None) -> int:
+    """按股票代码自动探测正式招股书（listconews）并下载。"""
+    print(f"🔎 正在通过港交所 titlesearch 自动探测 {stock_code} 的正式招股书…")
+    hits = search_prospectus_via_titlesearch(stock_code)
+    if not hits:
+        print(f"❌ 未探测到 {stock_code} 的正式招股书（可能尚未招股或代码有误）。")
+        print("💡 可用 --url <链接> 直接下载，或用 --list 查看在审 IPO。")
+        return 1
+    # 优先「全球發售/股份發售」正式招股书，取最新一条
+    best = hits[0]
+    print(f"✅ 探测到 {len(hits)} 份招股书类文档，选用最新：")
+    print(f"   [{best['stock_name']}] {best['title']} ({best['date']}, {best.get('size','')})")
+    fname = _safe_filename(out_name or best["stock_name"] or stock_code)
+    out_path = os.path.join(out_dir, f"{fname}.pdf")
+    print(f"⬇️  下载：{best['url']}")
+    ok, msg = _download_pdf(best["url"], out_path)
+    if ok:
+        print(f"✅ {msg} -> {out_path}")
+        print(f"下一步：python3 pdf2md.py {out_path}")
+        return 0
+    print(f"❌ 下载失败：{msg}\n👉 链接：{best['url']}")
+    return 1
+
+
 def download(keyword: str | None, ipo_id: int | None, out_dir: str,
-             url: str | None = None, out_name: str | None = None) -> int:
-    # --- 方式一：用户直接提供招股书 URL（最可靠，绕过港交所链接失效问题）---
+             url: str | None = None, out_name: str | None = None,
+             code: str | None = None) -> int:
+    # --- 方式一：用户直接提供招股书 URL（最可靠）---
     if url:
         fname = _safe_filename(out_name or keyword or "prospectus")
         out_path = os.path.join(out_dir, f"{fname}.pdf")
@@ -110,6 +199,10 @@ def download(keyword: str | None, ipo_id: int | None, out_dir: str,
             return 0
         print(f"❌ 下载失败：{msg}\n👉 请确认链接可访问，或在浏览器手动下载。")
         return 1
+
+    # --- 方式二：按股票代码自动探测正式招股书（listconews）---
+    if code:
+        return _download_via_titlesearch(code, out_dir, out_name)
 
     ipos = fetch_hkex_active_ipos_sync()
 
@@ -133,46 +226,44 @@ def download(keyword: str | None, ipo_id: int | None, out_dir: str,
 
     if target is None:
         print(f"❌ 未找到匹配的 IPO（keyword={keyword}, id={ipo_id}）。先用 --list 查看。")
-        print("💡 若已知招股书链接，可用 --url <链接> --name <公司名> 直接下载。")
+        print("💡 也可用 --code <股票代码> 自动探测正式招股书，或 --url <链接> 直接下载。")
         return 1
 
-    url = get_prospectus_url(target)
-    if not url:
-        print(f"❌ {target.name} 当前还没有招股书 PDF（可能尚未提交聆讯后资料集）。")
-        return 1
-
+    # 先试 appactive 给的链接
+    appactive_url = get_prospectus_url(target)
     out_path = os.path.join(out_dir, f"{_safe_filename(target.name)}.pdf")
-    print(f"⬇️  正在下载：{target.name}\n    {url}")
-    ok, msg = _download_pdf(url, out_path)
-    if ok:
-        print(f"✅ {msg} -> {out_path}")
-        print(f"下一步：python3 pdf2md.py {out_path}")
-        return 0
-    else:
-        print(f"❌ 下载失败：{msg}")
-        print("   注：港交所 appactive 接口给的常是「申请版本」链接，公司正式招股后招股书会迁到")
-        print("   www1.hkexnews.hk/listedco/listconews/ 路径，旧链接会 404。")
-        print(f"👉 解决办法（二选一）：")
-        print(f"   1. 浏览器打开港交所披露易搜索该公司，复制正式招股书 PDF 链接，再用：")
-        print(f"      python3 fetch_prospectus.py --url <链接> --name {_safe_filename(target.name)}")
-        print(f"   2. 手动下载后直接：python3 pdf2md.py <本地PDF路径>")
-        print(f"   （失效链接：{url}）")
-        return 1
+    if appactive_url:
+        print(f"⬇️  正在下载（appactive）：{target.name}\n    {appactive_url}")
+        ok, msg = _download_pdf(appactive_url, out_path)
+        if ok:
+            print(f"✅ {msg} -> {out_path}")
+            print(f"下一步：python3 pdf2md.py {out_path}")
+            return 0
+        print(f"⚠️  appactive 链接不可用（{msg}），自动切换到 titlesearch 探测正式招股书…")
+
+    # appactive 失效 → 自动用股票代码探测 listconews
+    if target.stock_code:
+        return _download_via_titlesearch(str(target.stock_code), out_dir, out_name or target.name)
+
+    print(f"❌ {target.name} 无股票代码，无法自动探测正式招股书。")
+    print(f"👉 请用 --url <链接> 手动指定，或浏览器下载后直接 pdf2md.py <PDF>。")
+    return 1
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="港股招股书下载器（港交所官方源 + 用户直传链接）")
+    p = argparse.ArgumentParser(description="港股招股书下载器（港交所官方源 + 自动探测 + 用户直传）")
     p.add_argument("--list", action="store_true", help="列出当前处理中的 IPO 及招股书链接")
     p.add_argument("--name", help="按公司名关键词下载（大小写不敏感）；配合 --url 时作为文件名")
     p.add_argument("--id", type=int, help="按港交所披露易 ID 或股票代码下载")
-    p.add_argument("--url", help="直接指定招股书 PDF 链接下载（最可靠，绕过港交所链接失效）")
+    p.add_argument("--code", help="按股票代码自动探测正式招股书（listconews 路径，最推荐）")
+    p.add_argument("--url", help="直接指定招股书 PDF 链接下载")
     p.add_argument("--out", default="./prospectus", help="输出目录（默认 ./prospectus）")
     args = p.parse_args()
 
-    if args.list or (not args.name and args.id is None and not args.url):
+    if args.list or (not args.name and args.id is None and not args.url and not args.code):
         list_active()
         return 0
-    return download(args.name, args.id, args.out, url=args.url, out_name=args.name)
+    return download(args.name, args.id, args.out, url=args.url, out_name=args.name, code=args.code)
 
 
 if __name__ == "__main__":

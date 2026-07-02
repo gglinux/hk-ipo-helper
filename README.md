@@ -43,22 +43,24 @@
 pip install -r scripts/requirements.txt   # 需 Python 3.10+
 cd scripts
 
-# 1. 找标的 + 拿招股书（港交所官方源，带 %PDF 校验）
+# 1. 找标的 + 拿招股书（--code 自动探测正式招股书，最可靠）
 python3 fetch_prospectus.py --list
-python3 fetch_prospectus.py --name 永康        # 或 --id 108390
+python3 fetch_prospectus.py --code 6880        # 自动探测 listconews 招股书并下载
 
 # 2. 招股书精读（产出 全文.md + 关键章节.key.md + 表格自检）
-python3 pdf2md.py ./prospectus/永康控股.pdf
+python3 pdf2md.py ./prospectus/MOMENTA-W.pdf
 
 # 3. 抓量化数据（AAStocks 优先，含降级；看 _data_status 判断哪些要 web search 补）
-python3 hkipo.py analyze 00668
-python3 hkipo.py ah compare 00668 --price 99.32 --name 安克创新
+python3 hkipo.py analyze 06880
+python3 hkipo.py ah compare 06880 --price 295.6 --name Momenta
 
-# 4. 中签率（本地计算，无网络依赖）
-python3 hkipo.py odds --oversub 300 --price 99.32
+# 4. 中签率 + D7 决策器（散户核心：闸门 → 期望值 → 组合）
+python3 hkipo.py odds --oversub 36 --price 295.6
+python3 decision_engine.py eval --json '{"name":"MOMENTA-W","code":"06880","entry_fee":5971.6,"lot_market_value":5912,"win_rate_1lot":0.5,"expected_first_day_pct":15}'
+python3 decision_engine.py portfolio --capital 30000 --json '[{...},{...}]'
 ```
 
-在支持 Skills 的 AI Agent 中，直接说「帮我分析 00668.HK 能不能打」即可触发完整 6D 分析。
+在支持 Skills 的 AI Agent 中，直接说「帮我分析 06880.HK 能不能打」即可触发完整流程（闸门 → 6D → D7 → 组合）。
 
 ## 目录结构
 
@@ -66,8 +68,9 @@ python3 hkipo.py odds --oversub 300 --price 99.32
 hk-ipo-helper/
 ├── SKILL.md                     # 核心指令（角色/铁律/工作流/6D模型/降级策略）
 ├── scripts/
-│   ├── fetch_prospectus.py      # 招股书自动下载（港交所源 + %PDF 校验）
+│   ├── fetch_prospectus.py      # 招股书下载（--code 自动探测 listconews / --url 直传 / %PDF 校验）
 │   ├── pdf2md.py                # 招股书解析：去噪 + 章节切分 + 表格自检
+│   ├── decision_engine.py       # ⭐ 散户决策器：闸门制 + D7 期望值 + 组合层
 │   ├── hkipo.py                 # 数据引擎 CLI 入口
 │   └── hkipo/                   # 数据源适配器（aastocks 主力；hkex/jisilu/ah 存活；aipo 备用）
 │   └── config/                  # 用户画像配置
