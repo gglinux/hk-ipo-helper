@@ -41,8 +41,12 @@ from typing import Optional
 # 来源：futuhkapp.com/cn/support/topic2_418
 # ============================================================
 # 中签成交时一次性收取：证监会征费+财汇局征费+联交所交易费+经纪佣金 ≈ 1.0085% × 中签金额
-# （港股新股卖出时同样按此类交易费率，这里成本口径统一按买入侧一次计，卖出费在首日涨幅里体现净值）
-DEAL_FEE_RATE = 0.010085        # 中签成交费率（仅中签时产生）
+DEAL_FEE_RATE = 0.010085        # 申购中签成交费率（仅中签时产生）
+# 卖出侧成本（中签后卖出才产生，暗盘/首日通用）：印花税0.1%+交易费0.00565%+证监会0.0027%
+# +财汇局0.00015%+交收费0.0042% ≈ 0.113% 的比例费；另加平台使用费 15 港元/笔。
+# 港股卖出还含券商佣金（各套餐不同，约0.03%~0.25%），这里按富途暗盘佣金0.03%并入，取保守 0.15% 比例。
+SELL_FEE_RATE = 0.0015          # 卖出侧比例费（印花税+交易费+征费+交收+佣金的保守合计）
+SELL_PLATFORM_FEE = 15.0        # 卖出平台使用费（港元/笔）
 # 申购手续费（按笔，与是否中签无关）
 FEE_ORDINARY_HANDLING = 0.0     # 普通申购（现金 / 富途融资）：富途免手续费
 FEE_BANK_HANDLING = 100.0       # 银行融资申购：100 港元/笔
@@ -113,9 +117,10 @@ def breakeven_pct(entry_fee: float, lots: int, lot_market_value: float,
     if funding == "bank_margin" and bank_rate is not None:
         rate = bank_rate
     capital = entry_fee * lots
-    deal_fee = total_mv * DEAL_FEE_RATE          # 中签成交费
+    deal_fee = total_mv * DEAL_FEE_RATE          # 中签买入成交费
+    sell_fee = total_mv * SELL_FEE_RATE + SELL_PLATFORM_FEE  # 卖出侧成本（比例费+平台费）
     interest = (capital * rate * margin_days / 365) if use_margin else 0.0
-    total_cost = deal_fee + handling + interest
+    total_cost = deal_fee + sell_fee + handling + interest
     return round(total_cost / total_mv * 100, 3)
 
 
@@ -158,8 +163,9 @@ class EVResult:
 def expected_value(inp: EVInput) -> EVResult:
     """计算单只票、指定手数的期望净收益、期望收益率与年化收益率。
 
-    期望净收益 = 中签率×一手市值×首日涨幅%  −  成交费(中签才收)  −  申购手续费  −  融资利息(占款就收)
-    - 成交费(1.0085%)：只在中签成交时产生，故乘中签率。
+    期望净收益 = 中签率×一手市值×首日涨幅%  −  买入成交费  −  卖出成本  −  申购手续费  −  融资利息
+    - 买入成交费(1.0085%)：中签成交才收，乘中签率。
+    - 卖出成本(约0.15%比例费 + 15港元平台费)：中签后卖出才产生，按卖出时(上涨后)市值算，乘中签率。
     - 申购手续费：普通申购=0；银行融资=100港元/笔，按笔收（与中签无关）。
     - 融资利息：动用孖展即产生，无论中签与否都付（不乘中签率）。
     """
@@ -174,14 +180,17 @@ def expected_value(inp: EVInput) -> EVResult:
     expected_hit_mv = inp.win_rate_1lot * total_mv
     gross_gain = expected_hit_mv * (inp.expected_first_day_pct / 100.0)
 
-    # 成交费：中签成交才收 1.0085%，故乘中签率
+    # 买入成交费：中签成交才收 1.0085%，故乘中签率
     deal_fee = total_mv * DEAL_FEE_RATE * inp.win_rate_1lot
+    # 卖出成本：中签后卖出才产生。比例费按卖出时(上涨后)市值算，平台费按笔；均乘中签率
+    sell_mv = total_mv * (1 + inp.expected_first_day_pct / 100.0)
+    sell_fee = (sell_mv * SELL_FEE_RATE + SELL_PLATFORM_FEE) * inp.win_rate_1lot
     # 申购手续费：按笔收，与中签无关（普通申购=0，银行融资=100）
     handling_fee = handling
     # 融资利息：占用融资额度就收，无论中签与否
     interest = (capital * rate * inp.margin_days / 365) if use_margin else 0.0
 
-    net = gross_gain - deal_fee - handling_fee - interest
+    net = gross_gain - deal_fee - sell_fee - handling_fee - interest
 
     be = breakeven_pct(inp.entry_fee, lots, inp.lot_market_value,
                        funding=inp.funding, margin_days=inp.margin_days, bank_rate=inp.bank_rate)
