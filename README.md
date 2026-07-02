@@ -40,7 +40,7 @@
 ## 快速开始
 
 ```bash
-pip install -r scripts/requirements.txt   # 需 Python 3.10+
+pip install -r scripts/requirements.txt   # 需 Python 3.9+（已兼容 macOS 自带 3.9）
 cd scripts
 
 # 1. 找标的 + 拿招股书（--code 自动探测正式招股书，最可靠）

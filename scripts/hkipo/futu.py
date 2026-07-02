@@ -4,6 +4,7 @@
 抓取富途网页端的港股新股数据，包括已上市新股的首日表现、暗盘涨跌幅等。
 数据来源: https://www.futunn.com/quote/hk/ipo
 """
+from __future__ import annotations
 
 import json
 import re

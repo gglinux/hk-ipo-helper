@@ -15,6 +15,7 @@
 
 依赖：pymupdf4llm（方案 A）。若需更强的复杂表格解析，可自行改用 MinerU（见 README「可选增强」）。
 """
+from __future__ import annotations
 
 import argparse
 import re

@@ -69,7 +69,7 @@ cd <skill_dir>
 pip install -r scripts/requirements.txt
 ```
 
-- **必须 Python 3.10+**（数据引擎用了 `dict | None` 新式类型语法；若默认 `python3` 是 3.9，请改用 `python3.10`/`python3.11` 调用）。
+- **Python 3.9+ 即可**（所有模块已加 `from __future__ import annotations`，`dict | None` 等新式类型语法在 3.9 下也能正常运行；macOS 自带 python3 3.9 可直接用）。
 - `opencc` 为**可选**依赖（仅用于 A+H 繁→简公司名转换），缺失会自动降级，不影响其他功能。若在 arm64 Mac 上遇 numpy/onnxruntime 架构报错，跳过它即可。
 
 ## 5. 最高优先级铁律

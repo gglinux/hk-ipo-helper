@@ -6,6 +6,7 @@ TradeSmart 数据源适配器
 
 数据来源: https://lowrisktradesmart.org/api/ipos
 """
+from __future__ import annotations
 
 from typing import Optional
 

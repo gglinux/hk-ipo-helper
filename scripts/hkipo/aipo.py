@@ -10,6 +10,7 @@
 
 返回纯数据字典，不做评分或判断。
 """
+from __future__ import annotations
 
 import json
 import re

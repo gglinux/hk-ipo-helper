@@ -4,6 +4,7 @@ Provides market sentiment indicators for HK IPO analysis:
 - HSI (Hang Seng Index) - market sentiment gauge
 - Sponsor historical performance from AASTOCKS
 """
+from __future__ import annotations
 
 import json
 import sys

@@ -4,6 +4,7 @@ etnet 经济通保荐人数据源
 抓取 etnet 港股 IPO 保荐人表现数据。
 数据来源: https://www.etnet.com.hk/www/tc/stocks/ipo-sponsor-performance.php
 """
+from __future__ import annotations
 
 import re
 from dataclasses import dataclass

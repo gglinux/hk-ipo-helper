@@ -6,6 +6,7 @@
 注意：部分字段（如 issue_pe_range, jsl_first_incr_rt 等）需要集思录会员才能查看，
 非会员返回 HTML 链接形式，本模块会将其处理为 None。
 """
+from __future__ import annotations
 
 import re
 import sys

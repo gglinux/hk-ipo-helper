@@ -19,6 +19,7 @@
 - 暗盘实时行情需要 WebSocket 连接
 - 部分数据（如孖展）只在招股期间可用
 """
+from __future__ import annotations
 
 import re
 import sys

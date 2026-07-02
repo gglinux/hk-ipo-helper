@@ -16,6 +16,7 @@
 参考：
 - 港交所上市规则第18章
 """
+from __future__ import annotations
 
 import argparse
 import json

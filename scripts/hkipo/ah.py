@@ -1,4 +1,5 @@
 """A+H share price comparison using Tencent Finance API."""
+from __future__ import annotations
 
 import re
 import urllib.parse

@@ -144,7 +144,10 @@ def expected_value(inp: EVInput) -> EVResult:
     expected_hit_mv = inp.win_rate_1lot * total_mv
     gross_gain = expected_hit_mv * (inp.expected_first_day_pct / 100.0)
 
-    buy_cost = capital * COST_FACTOR
+    # 买入手续费：港股现金申购未中签则资金原路退回、零费用，
+    # 0.77% 硬成本只在【中签成交】时产生，故用中签率加权（与 sell_cost 一致）。
+    buy_cost = capital * COST_FACTOR * inp.win_rate_1lot
+    # 融资利息：只要动用孖展申购，无论中签与否都要付息（占用了融资额度）。
     interest = (capital * inp.margin_rate * inp.margin_days / 365) if inp.use_margin else 0.0
     # 卖出佣金只在中签时产生，用中签率加权
     sell_cost = SELL_COMMISSION_HKD * inp.win_rate_1lot
