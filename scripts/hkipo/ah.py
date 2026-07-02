@@ -18,17 +18,55 @@ CNY_HKD_RATE = 1.12
 _a_share_cache: dict[str, str | None] = {}
 
 
+def _is_index_or_invalid(code: str) -> bool:
+    """判断是否为指数或非个股代码（需排除，避免误匹配上证指数 sh000001 等）。"""
+    if not code or len(code) != 8:
+        return True
+    market, num = code[:2], code[2:]
+    # 上证指数 sh000xxx；上证基金/其他 sh880xxx；深证指数 sz399xxx
+    if market == "sh" and (num.startswith("000") or num.startswith("880")):
+        return True
+    if market == "sz" and num.startswith("399"):
+        return True
+    # A股个股：沪市 60/68 开头，深市 00/30 开头
+    if market == "sh" and not (num.startswith("60") or num.startswith("68")):
+        return True
+    if market == "sz" and not (num.startswith("00") or num.startswith("30")):
+        return True
+    return False
+
+
+def _name_matches(company_name: str, sec_name: str) -> bool:
+    """校验 suggest 返回的证券简称与公司名有实质重叠。
+
+    新浪 suggest 查不到时会兜底返回一堆热门股（上证指数/京东方/茅台…），
+    必须用名称重叠过滤，否则会误匹配。取公司名前若干核心字与证券简称比对。
+    """
+    if not sec_name:
+        return False
+    simplified = _t2s(company_name)
+    # 去掉常见后缀噪音
+    for junk in ["股份", "有限公司", "控股", "集团", "科技", "技术", "-W", "-B", "-P", "智驾", "智能"]:
+        simplified = simplified.replace(junk, "")
+    core = simplified.strip()
+    if len(core) < 2:
+        core = _t2s(company_name)[:2]
+    # 证券简称包含公司核心名的前2字，或反向包含，视为匹配
+    head2 = core[:2]
+    return bool(head2) and (head2 in sec_name or sec_name[:2] in _t2s(company_name))
+
+
 def search_a_share_code(company_name: str) -> str | None:
     """Search for A-share code by company name using Sina suggest API.
-    
+
     Tries both traditional (original) and simplified Chinese names.
+    双重过滤：①排除指数/非个股代码；②校验证券简称与公司名重叠（防热门股兜底误匹配）。
     """
     if not company_name:
         return None
     if company_name in _a_share_cache:
         return _a_share_cache[company_name]
 
-    # Try both traditional and simplified
     names_to_try = [company_name]
     simplified = _t2s(company_name)
     if simplified != company_name:
@@ -39,11 +77,23 @@ def search_a_share_code(company_name: str) -> str | None:
             encoded = urllib.parse.quote(name)
             url = f"https://suggest3.sinajs.cn/suggest/type=11,12&key={encoded}"
             resp = httpx.get(url, timeout=10)
-            m = re.search(r",(sz|sh)(\d{6}),", resp.text)
-            if m:
-                code = f"{m.group(1)}{m.group(2)}"
-                _a_share_cache[company_name] = code
-                return code
+            text = resp.content.decode("gbk", errors="ignore")
+            # suggest 每条格式：code,type,num,fullcode,证券简称,...  用 ; 分隔多条
+            for entry in text.split(";"):
+                fields = entry.split(",")
+                if len(fields) < 5:
+                    continue
+                full_code = fields[3].strip()  # 如 sz002594
+                sec_name = fields[4].strip()   # 证券简称
+                m = re.fullmatch(r"(sz|sh)(\d{6})", full_code)
+                if not m:
+                    continue
+                if _is_index_or_invalid(full_code):
+                    continue
+                if not _name_matches(company_name, sec_name):
+                    continue  # 名称不重叠 → 热门股兜底误匹配，跳过
+                _a_share_cache[company_name] = full_code
+                return full_code
         except (httpx.HTTPError, ValueError, AttributeError):
             pass
 
