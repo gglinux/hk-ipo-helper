@@ -54,11 +54,26 @@ HKEX_BASE = "https://www1.hkexnews.hk"
 PROSPECTUS_TITLE_KEYWORDS = ["全球發售", "股份發售", "招股章程", "發售通函", "招股章程及配發結果"]
 
 
+# titlesearch 单次请求的 rowRange：实测接口最多能返回约 10000 条（超过则被截断），
+# 且按最新时间倒序返回——窗口一拉长，旧公告会被更新的公告"挤出"截断边界之外。
+# 单次安全查询步长（天）：实测港股单日公告量峰值可达 2000+ 条，为留足安全余量，
+# 步长收紧为 1 天（配合 rowRange=10000，单日窗口远不会触及上限）。
+_TITLESEARCH_ROW_RANGE = 10000
+_TITLESEARCH_STEP_DAYS = 1
+
+
 def search_prospectus_via_titlesearch(stock_code: str, days_back: int = 30) -> list[dict]:
     """通过港交所 titlesearch servlet 按股票代码查正式招股书（listconews 路径）。
 
     这是自动探测正式招股书的可靠方式：appactive 接口只给「申请版本」链接（正式招股后会 404），
     而公司正式招股后招股书发布在 /listedco/listconews/ 路径，只能通过本搜索接口拿到。
+
+    修复说明（重要）：该接口按时间倒序返回记录，且单次请求存在 rowRange 硬上限（约 3000~10000）。
+    若一次性查询整个 days_back 窗口，当区间内总公告量超过上限时，旧公告会被截断丢失——
+    这正是此前 06880（Momenta）等公司招股书"探测不到"的根因：接口实际只返回了最近 1~2 天的数据，
+    06/29 发布的招股书公告落在被截断的窗口外。
+    修复方式：把 days_back 拆成多个 _TITLESEARCH_STEP_DAYS 天的窄窗口，逐段查询（每段远低于上限），
+    一旦命中目标股票代码的招股书类文档就提前返回，避免遍历整个窗口造成不必要的请求。
 
     Args:
         stock_code: 港股代码，如 "6880" / "06880"
@@ -72,43 +87,63 @@ def search_prospectus_via_titlesearch(stock_code: str, days_back: int = 30) -> l
 
     code_norm = stock_code.replace(".HK", "").replace(".hk", "").strip().zfill(5)
     today = datetime.now()
-    from_date = (today - timedelta(days=days_back)).strftime("%Y%m%d")
-    to_date = today.strftime("%Y%m%d")
 
-    params = {
-        "sortDir": "0", "sortByOptions": "DateTime", "category": "0",
-        "market": "SEHK", "stockId": "-1", "documentType": "-1",
-        "fromDate": from_date, "toDate": to_date, "title": "",
-        "searchType": "0", "t": "1", "lang": "ZH", "rowRange": "3000",
-    }
-    try:
-        with httpx.Client(follow_redirects=True, timeout=30, headers=HEADERS) as client:
-            resp = client.get(TITLE_SEARCH_URL, params=params)
-            resp.raise_for_status()
-            outer = resp.json()
-            records = json.loads(outer.get("result", "[]"))
-    except Exception as e:  # noqa: BLE001
-        print(f"⚠️  titlesearch 查询失败（{type(e).__name__}），无法自动探测正式招股书链接。", file=sys.stderr)
-        return []
+    hits: list[dict] = []
+    seen_links: set[str] = set()
 
-    hits = []
-    for r in records:
-        sc = str(r.get("STOCK_CODE", "")).zfill(5)
-        title = r.get("TITLE", "")
-        link = r.get("FILE_LINK", "")
-        if sc != code_norm:
-            continue
-        # 只要 PDF 招股书类文档
-        if not link.lower().endswith(".pdf"):
-            continue
-        if any(k in title for k in PROSPECTUS_TITLE_KEYWORDS):
-            hits.append({
-                "title": title,
-                "date": r.get("DATE_TIME", ""),
-                "url": HKEX_BASE + link if link.startswith("/") else link,
-                "stock_name": r.get("STOCK_NAME", ""),
-                "size": r.get("FILE_INFO", ""),
-            })
+    # 按窄窗口从最近往过去分段查询，命中即可提前返回（招股书通常在最近几天内发布）
+    window_end = today
+    while window_end > today - timedelta(days=days_back):
+        window_start = max(window_end - timedelta(days=_TITLESEARCH_STEP_DAYS), today - timedelta(days=days_back))
+        from_date = window_start.strftime("%Y%m%d")
+        to_date = window_end.strftime("%Y%m%d")
+
+        params = {
+            "sortDir": "0", "sortByOptions": "DateTime", "category": "0",
+            "market": "SEHK", "stockId": "-1", "documentType": "-1",
+            "fromDate": from_date, "toDate": to_date, "title": "",
+            "searchType": "0", "t": "1", "lang": "ZH", "rowRange": str(_TITLESEARCH_ROW_RANGE),
+        }
+        try:
+            with httpx.Client(follow_redirects=True, timeout=30, headers=HEADERS) as client:
+                resp = client.get(TITLE_SEARCH_URL, params=params)
+                resp.raise_for_status()
+                outer = resp.json()
+                records = json.loads(outer.get("result", "[]"))
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️  titlesearch 查询失败（{type(e).__name__}，窗口 {from_date}~{to_date}），跳过该段。", file=sys.stderr)
+            records = []
+
+        if len(records) >= _TITLESEARCH_ROW_RANGE:
+            print(f"⚠️  窗口 {from_date}~{to_date} 返回记录数达到上限 {_TITLESEARCH_ROW_RANGE}，"
+                  f"该段可能仍有截断，请留意结果。", file=sys.stderr)
+
+        for r in records:
+            sc = str(r.get("STOCK_CODE", "")).zfill(5)
+            title = r.get("TITLE", "")
+            link = r.get("FILE_LINK", "")
+            if sc != code_norm:
+                continue
+            if not link.lower().endswith(".pdf"):
+                continue
+            if any(k in title for k in PROSPECTUS_TITLE_KEYWORDS):
+                if link in seen_links:
+                    continue
+                seen_links.add(link)
+                hits.append({
+                    "title": title,
+                    "date": r.get("DATE_TIME", ""),
+                    "url": HKEX_BASE + link if link.startswith("/") else link,
+                    "stock_name": r.get("STOCK_NAME", ""),
+                    "size": r.get("FILE_INFO", ""),
+                })
+
+        if hits:
+            # 命中即可提前返回，避免继续往更早的窗口发起不必要的请求
+            break
+
+        window_end = window_start
+
     return hits
 
 
