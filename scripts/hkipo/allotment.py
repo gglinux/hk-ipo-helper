@@ -459,13 +459,27 @@ def format_allotment_table(
     
     for result in results:
         lines.append(format_allotment_result(result, entry_fee))
-    
+
+    # 已知失效场景检测：机制B + 低入场费（热门股散户扎堆打1手，甲组红鞋一人一手几乎必中）
+    low_entry = entry_fee <= 15000
+    warn_underestimate = (str(mechanism).upper() == "B") and low_entry
     lines.extend([
         "",
-        "⚠️ 基于 TradeSmart 算法估算，实际以官方公告为准",
-        f"   算法参数: K_A={K_MECHANISM_A}, K_B={K_MECHANISM_B}"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "⚠️ 重要：本表仅为【粗略初筛】，不可作为 D7 期望值的中签率输入！",
+        "   模型基于超购倍数推户数，但实际户均申购手数远高于假设，",
+        "   对【机制B + 低入场费热门股】会严重低估中签率（实测差距可达 100 倍）。",
+        "   例：甲组小户打 1-3 手常几乎必中，模型却可能算出 <1%。",
+        "",
+        "✅ D7 的 win_rate_1lot 必须以【券商实时预测】为准（富途/华泰/辉立"
+        "『稳中』『一手中签率』），本表仅用于没有券商数据时的粗略初筛。",
     ])
-    
+    if warn_underestimate:
+        lines.append("")
+        lines.append("🔴 当前正是【机制B + 低入场费】的高风险低估场景——本表中签率大概率被严重低估，"
+                     "请务必改用券商实时预测！")
+    lines.append(f"   算法参数: K_A={K_MECHANISM_A}, K_B={K_MECHANISM_B}（估算，实际以官方公告为准）")
+
     return "\n".join(lines)
 
 
@@ -540,9 +554,20 @@ def main(argv=None):
     if args.table:
         # 生成多档位表
         results = predict_allotment_table(ipo_data, args.oversub)
-        
+
         if args.json:
-            print(json.dumps(results, ensure_ascii=False, indent=2))
+            low_entry = entry_fee <= 15000
+            warn = (str(args.mechanism).upper() == "B") and low_entry
+            payload = {
+                "_disclaimer": "本表仅为粗略初筛，不可作为 D7 的中签率输入。模型对机制B+低入场费热门股"
+                               "会严重低估中签率（差距可达100倍）。D7 的 win_rate_1lot 必须以券商实时预测"
+                               "（富途/华泰/辉立）为准。",
+                "_high_risk_underestimate": warn,
+                "mechanism": args.mechanism,
+                "entry_fee": round(entry_fee, 0),
+                "table": results,
+            }
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
         else:
             print(format_allotment_table(results, ipo_data, args.oversub))
     else:

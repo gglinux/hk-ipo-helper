@@ -16,7 +16,13 @@
      在本金约束下按「每股本金期望收益率」排序，给出「这些钱该打哪几只、各打几手」。
 
 设计原则：本引擎只做计算与排序，不编造数据。所有输入（中签率/入场费/超购/首日涨幅预期）
-必须来自 analyze / odds / 招股书 / web search，缺失则要求补齐或按保守区间给出并显式标注。
+必须来自 analyze / 招股书 / web search / 券商实时数据，缺失则要求补齐或按保守区间给出并显式标注。
+
+⚠️ 中签率 win_rate_1lot 的来源铁律：
+   必须以【券商实时预测】为准（富途牛牛/华泰涨乐/辉立的『一手中签率』『稳中』预估）。
+   本地 odds(allotment.py) 仅作没有券商数据时的粗略初筛——它基于机制A模型+超购倍数推户数，
+   对【机制B + 低入场费热门股】会严重低估中签率（实测差距可达100倍，因散户扎堆打1手、
+   甲组红鞋一人一手几乎必中，实际户均手数远高于模型假设）。绝不能直接拿 odds 的值喂 D7。
 
 用法（命令行，便于 AI 或用户直接调用）：
     # 单只票的期望值 + 闸门判定（JSON 输入）
@@ -134,7 +140,7 @@ class EVInput:
     code: str
     entry_fee: float                 # 一手入场费（港元）
     lot_market_value: float          # 一手市值 = 每手股数 × 发行价（不含手续费）
-    win_rate_1lot: float             # 一手中签率（0-1），来自 odds/allotment
+    win_rate_1lot: float             # 一手中签率(0-1)。铁律：以券商实时预测(富途/华泰/辉立)为准，odds仅初筛
     expected_first_day_pct: float    # 首日涨幅期望%（来自超购/情绪/回测，可给区间中值）
     lots: int = 1                    # 申购手数
     funding: str = "cash"            # cash 现金 / futu_margin 富途融资 / bank_margin 银行融资
@@ -290,6 +296,15 @@ def evaluate_one(payload: dict) -> dict:
         return result
 
     days = payload.get("margin_days", DEFAULT_MARGIN_DAYS)
+
+    # 中签率来源校验：铁律是以券商实时预测为准，odds 仅初筛
+    wr_source = payload.get("win_rate_source")  # 期望值: 'broker'(券商预测) / 'odds'(本地初筛) / None
+    if wr_source in ("odds", None):
+        result["win_rate_warning"] = (
+            "⚠️ 中签率来源未标注为券商实时预测。若该值来自本地 odds 初筛，"
+            "对『机制B+低入场费热门股』可能被严重低估（差距可达100倍），"
+            "会导致期望值/年化被严重低估、结论可能反向。请以富途/华泰/辉立的一手中签率预测复核后重算。")
+
     common = dict(
         name=payload.get("name", ""), code=payload.get("code", ""),
         entry_fee=payload["entry_fee"], lot_market_value=payload["lot_market_value"],

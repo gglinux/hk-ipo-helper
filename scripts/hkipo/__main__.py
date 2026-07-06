@@ -331,9 +331,22 @@ def main():
             'mechanism': mechanism,
         }
         results = predict_allotment_table(ipo_data, oversub)
-        
+
+        # 低估风险检测：机制B + 低入场费热门股，模型会严重低估中签率（差距可达100倍）
+        low_entry = entry_fee <= 15000
+        warn_underestimate = (mechanism == 'B') and low_entry
+
         if output_json:
-            print(json.dumps(results, indent=2, ensure_ascii=False))
+            payload = {
+                "_disclaimer": "本表仅为粗略初筛，不可作为 D7 的中签率输入。模型基于超购倍数推户数，"
+                               "对机制B+低入场费热门股会严重低估中签率（差距可达100倍）。"
+                               "D7 的 win_rate_1lot 必须以券商实时预测（富途/华泰/辉立）为准。",
+                "_high_risk_underestimate": warn_underestimate,
+                "mechanism": mechanism,
+                "entry_fee": round(entry_fee, 0),
+                "table": results,
+            }
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
         else:
             print(f"📊 中签率表格（超购 {oversub}x，机制{mechanism}）\n")
             print(f"{'手数':>6} │ {'金额':>12} │ {'中签率':>8} │ 分组")
@@ -341,7 +354,14 @@ def main():
             for r in results:
                 amt = int(entry_fee * r['lots'])
                 print(f"{r['lots']:>6} │ {amt:>12,} │ {r['probability_pct']:>8} │ {r['group']}")
-            print(f"\n⚠️ 基于 TradeSmart 算法预测，实际以官方公告为准")
+            print()
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print("⚠️ 本表仅为【粗略初筛】，不可直接作为 D7 中签率输入！")
+            print("   模型对【机制B+低入场费热门股】会严重低估中签率（差距可达100倍）：")
+            print("   散户扎堆打1手、甲组红鞋一人一手几乎必中，实际户均手数远高于模型假设。")
+            print("✅ D7 的 win_rate_1lot 必须以【券商实时预测】为准（富途/华泰/辉立的一手中签率）。")
+            if warn_underestimate:
+                print("🔴 当前正是【机制B+低入场费】高危低估场景，务必改用券商实时预测！")
     
     elif module == 'calendar':
         # 资金日历（截止日期分组）
